@@ -1,0 +1,109 @@
+{
+    "Comment": "A description of my state machine",
+    "StartAt": "Convert to CSV",
+    "States": {
+      "Convert to CSV": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "OutputPath": "$.Payload",
+        "Parameters": {
+          "Payload.$": "$",
+          "FunctionName": "${ConvertSqlToCsvLambdaArn}"
+        },
+        "Retry": [
+          {
+            "ErrorEquals": [
+              "Lambda.ServiceException",
+              "Lambda.AWSLambdaException",
+              "Lambda.SdkClientException",
+              "Lambda.TooManyRequestsException"
+            ],
+            "IntervalSeconds": 1,
+            "MaxAttempts": 3,
+            "BackoffRate": 2
+          }
+        ],
+        "Next": "Shipping File Analysis"
+      },
+      "Shipping File Analysis": {
+        "Type": "Map",
+        "ItemProcessor": {
+          "ProcessorConfig": {
+            "Mode": "DISTRIBUTED",
+            "ExecutionType": "EXPRESS"
+          },
+          "StartAt": "Check games valid time",
+          "States": {
+            "Check games valid time": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "Payload.$": "$",
+                "FunctionName": "${AnalyseDataTimeLambdaArn}"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Map"
+            },
+            "Map": {
+              "Type": "Map",
+              "ItemProcessor": {
+                "ProcessorConfig": {
+                  "Mode": "INLINE"
+                },
+                "StartAt": "SQS SendMessage",
+                "States": {
+                  "SQS SendMessage": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::sqs:sendMessage",
+                    "Parameters": {
+                      "MessageBody.$": "$",
+                      "QueueUrl": "${DataAnalysisQueueUrl}"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        "End": true,
+        "Label": "ShippingFileAnalysis",
+        "MaxConcurrency": 1000,
+        "ItemReader": {
+          "Resource": "arn:aws:states:::s3:getObject",
+          "ReaderConfig": {
+            "InputType": "CSV",
+            "CSVHeaderLocation": "FIRST_ROW"
+          },
+          "Parameters": {
+            "Bucket": "${BucketName}",
+            "Key": "${DataObjectKey}"
+          }
+        },
+        "ItemBatcher": {
+          "MaxItemsPerBatch": 50
+        },
+        "ResultWriter": {
+          "Resource": "arn:aws:states:::s3:putObject",
+          "Parameters": {
+            "Bucket": "${BucketName}",
+            "Prefix": "output1"
+          }
+        }
+      }
+    }
+  }
